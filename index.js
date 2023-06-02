@@ -48,7 +48,7 @@ async function run() {
         await client.connect();
 
         const usersCollection = client.db('bistroDb').collection('users');
-        const bistroCollection = client.db('bistroDb').collection('menu');
+        const menuCollection = client.db('bistroDb').collection('menu');
         const reviewCollection = client.db('bistroDb').collection('reviews');
         const cartCollection = client.db('bistroDb').collection('carts');
 
@@ -133,9 +133,22 @@ async function run() {
 
         // menu related apis
         app.get('/menu', async (req, res) => {
-            const result = await bistroCollection.find().toArray();
+            const result = await menuCollection.find().toArray();
             res.send(result);
         });
+
+        app.post('/menu', verifyJWT, verifyAdmin, async (req, res) => {
+            const newItem = req.body;
+            const result = await menuCollection.insertOne(newItem);
+            res.send(result);
+        });
+
+        app.delete('/menu/:id', verifyJWT, verifyAdmin, async (req, res) => {
+            const id = req.params.id;
+            const query = {_id: new ObjectId(id)};
+            const result = await menuCollection.deleteOne(query);
+            res.send(result);
+        })
 
         // reviews related apis
         app.get('/reviews', async (req, res) => {
