@@ -5,7 +5,7 @@ const cors = require('cors');
 const jwt = require('jsonwebtoken');
 require('dotenv').config();
 const port = process.env.PORT || 5000;
-
+const stripe = require('stripe')(process.env.PAYMENT_SECRET_KEY);
 // middleware
 app.use(express.json());
 app.use(cors());
@@ -51,6 +51,7 @@ async function run() {
         const menuCollection = client.db('bistroDb').collection('menu');
         const reviewCollection = client.db('bistroDb').collection('reviews');
         const cartCollection = client.db('bistroDb').collection('carts');
+        const paymentCollection = client.db('bistroDb').collection('payments');
 
 
         // JWT Authentication
@@ -189,7 +190,113 @@ async function run() {
         })
 
 
+        // create payment intent
+        app.post('/create-payment-intent', async (req, res) => {
+            const {price} = req.body;
+            const amount = parseInt(price * 100);
+            const paymentIntent = await stripe.paymentIntents.create({
+                amount: amount,
+                currency: "usd",
+                payment_method_types: ['card']
+            });
+            res.send({
+                clientSecret: paymentIntent.client_secret
+            })
+        });
 
+        app.post('/payments', verifyJWT, async (req, res) => {
+            const payment = req.body;
+            const insertResult = await paymentCollection.insertOne(payment);
+            const query = {_id: {$in: payment.cartItems.map(id => new ObjectId(id))}};
+            const deleteResult = await cartCollection.deleteMany(query);
+            res.send({insertResult, deleteResult});
+        })
+
+        app.get('/admin-stats', verifyJWT, verifyAdmin, async (req, res) => {
+            const users = await usersCollection.estimatedDocumentCount();
+            const products = await menuCollection.estimatedDocumentCount();
+            const orders = await paymentCollection.estimatedDocumentCount();
+
+            //             await paymentCollection.aggregate([
+            //     {
+            //       $group: {
+            //         _id: null,
+            //         total: { $sum: "$price" }
+            //       }
+            //     }
+            //   ]).toArray
+
+            const payments = await paymentCollection.find().toArray();
+            const revenue = payments.reduce((sum, payment) => sum + payment.price, 0)
+
+
+            res.send({
+                users,
+                products,
+                orders,
+                revenue
+            });
+        })
+
+
+        // app.get('/order-stats', async (req, res) => {
+        //     const pipeline = [
+        //         {
+        //             $lookup: {
+        //                 from: 'menu',
+        //                 localField: 'menuItems',
+        //                 foreignField: '_id',
+        //                 as: 'menuItemsData'
+        //             }
+        //         },
+        //         {
+        //             $unwind: '$menuItemData'
+        //         },
+        //         {
+        //             $group: {
+        //                 _id: 'menuItemsData.category',
+        //                 count: {$sum: 1},
+        //                 totalPrice: {$sum: '$menuItemsData.price'}
+        //             }
+        //         }
+        //     ];
+        //     res.send(pipeline);
+        // })
+
+        app.get('/order-stats', verifyJWT, verifyAdmin, async (req, res) => {
+            const pipeline = [
+                {
+                    $lookup: {
+                        from: 'menu',
+                        localField: 'menuItems',
+                        foreignField: '_id',
+                        as: 'menuItemsData'
+                    }
+                },
+                {
+                    $unwind: '$menuItemsData'
+                },
+                {
+                    $group: {
+                        _id: '$menuItemsData.category',
+                        count: {$sum: 1},
+                        total: {$sum: '$menuItemsData.price'}
+                    }
+                },
+                {
+                    $project: {
+                        category: '$_id',
+                        count: 1,
+                        total: {$round: ['$total', 2]},
+                        _id: 0
+                    }
+                }
+            ];
+
+            const result = await paymentCollection.aggregate(pipeline).toArray()
+            res.send(result)
+
+        })
 
         // Send a ping to confirm a successful connection
         await client.db("admin").command({ping: 1});
